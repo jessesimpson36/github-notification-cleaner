@@ -34,40 +34,92 @@ func main() {
 		if err != nil {
 			continue
 		}
-		if !matched {
+
+		issueMatched, err := regexp.Match(`issues/[0-9]*`, []byte(url))
+		if err != nil {
 			continue
 		}
-		pullsNumRe := regexp.MustCompile(`pulls/[0-9]+`)
-		foundB := pullsNumRe.Find(urlBytes)
-		numRe := regexp.MustCompile(`[0-9]+`)
-		prNumber := numRe.Find(foundB)
-		prNumberStr := string(prNumber)
-		prNumberInt, err := strconv.Atoi(prNumberStr)
+		if matched {
+			handlePR(urlBytes, err, client, ctx, notification, url)
+		}
+		if issueMatched {
+			handleIssue(urlBytes, err, client, ctx, notification, url)
+		}
+
+	}
+}
+
+func handleIssue(urlBytes []byte, err error, client *github.Client, ctx context.Context, notification *github.Notification, url string) {
+	issuesNumRe := regexp.MustCompile(`issues/[0-9]+`)
+	foundB := issuesNumRe.Find(urlBytes)
+	numRe := regexp.MustCompile(`[0-9]+`)
+	issueNumber := numRe.Find(foundB)
+	issueNumberStr := string(issueNumber)
+	issueNumberInt, err := strconv.Atoi(issueNumberStr)
+	if err != nil {
+		fmt.Println("error " + err.Error())
+		os.Exit(1)
+	}
+	issue, _, err := client.Issues.Get(ctx, *notification.Repository.Owner.Login, *notification.Repository.Name, issueNumberInt)
+	if err != nil {
+		fmt.Println("error " + err.Error())
+		os.Exit(1)
+	}
+	if *issue.State == "closed" {
+		printIssueInfo(notification, issue, issueNumberStr, url)
+		idInt, err := strconv.Atoi(*notification.ID)
 		if err != nil {
 			fmt.Println("error " + err.Error())
 			os.Exit(1)
 		}
+		resp, err := client.Activity.MarkThreadDone(ctx, int64(idInt))
+		if err != nil {
+			fmt.Println("error " + err.Error() + " " + resp.Status)
+			os.Exit(1)
+		}
+		fmt.Println("Marked as done")
+		fmt.Println()
+	}
+}
 
-		pr, _, err := client.PullRequests.Get(ctx, *notification.Repository.Owner.Login, *notification.Repository.Name, prNumberInt)
+func printIssueInfo(notification *github.Notification, issue *github.Issue, issueNumberStr string, url string) {
+	fmt.Println("Number: " + issueNumberStr)
+	fmt.Println("Url: " + url)
+	fmt.Println("Subject: " + *notification.Subject.Title)
+	fmt.Println("Reason: " + *notification.Reason)
+	fmt.Println("state: " + *issue.Title)
+}
+
+func handlePR(urlBytes []byte, err error, client *github.Client, ctx context.Context, notification *github.Notification, url string) {
+	pullsNumRe := regexp.MustCompile(`pulls/[0-9]+`)
+	foundB := pullsNumRe.Find(urlBytes)
+	numRe := regexp.MustCompile(`[0-9]+`)
+	prNumber := numRe.Find(foundB)
+	prNumberStr := string(prNumber)
+	prNumberInt, err := strconv.Atoi(prNumberStr)
+	if err != nil {
+		fmt.Println("error " + err.Error())
+		os.Exit(1)
+	}
+
+	pr, _, err := client.PullRequests.Get(ctx, *notification.Repository.Owner.Login, *notification.Repository.Name, prNumberInt)
+	if err != nil {
+		fmt.Println("error " + err.Error())
+		os.Exit(1)
+	}
+	if *pr.State == "closed" {
+		printInfo(notification, pr, prNumberStr, url)
+		idInt, err := strconv.Atoi(*notification.ID)
 		if err != nil {
 			fmt.Println("error " + err.Error())
 			os.Exit(1)
 		}
-		if *pr.State == "closed" {
-			printInfo(notification, pr, prNumberStr, url)
-			idInt, err := strconv.Atoi(*notification.ID)
-			if err != nil {
-				fmt.Println("error " + err.Error())
-				os.Exit(1)
-			}
-			resp, err := client.Activity.MarkThreadDone(ctx, int64(idInt))
-			if err != nil {
-				fmt.Println("error " + err.Error() + " " + resp.Status)
-				os.Exit(1)
-			}
-			fmt.Println("Marked as done")
-			fmt.Println()
+		resp, err := client.Activity.MarkThreadDone(ctx, int64(idInt))
+		if err != nil {
+			fmt.Println("error " + err.Error() + " " + resp.Status)
+			os.Exit(1)
 		}
-
+		fmt.Println("Marked as done")
+		fmt.Println()
 	}
 }

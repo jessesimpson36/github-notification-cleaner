@@ -3,123 +3,115 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/google/go-github/v69/github"
 	"os"
 	"regexp"
 	"strconv"
+
+	"github.com/google/go-github/v69/github"
 )
 
-func printInfo(notification *github.Notification, pr *github.PullRequest, prNumberStr string, url string) {
+var (
+	rePull      = regexp.MustCompile(`pulls/[0-9]*`)
+	reIssues    = regexp.MustCompile(`issues/[0-9]*`)
+	issuesNumRe = regexp.MustCompile(`issues/[0-9]+`)
+	pullsNumRe  = regexp.MustCompile(`pulls/[0-9]+`)
+	numRe       = regexp.MustCompile(`[0-9]+`)
+)
 
+func printInfo(notification *github.Notification, state string, prNumberStr string, url string) {
 	fmt.Println("Number: " + prNumberStr)
 	fmt.Println("Url: " + url)
 	fmt.Println("Subject: " + *notification.Subject.Title)
 	fmt.Println("Reason: " + *notification.Reason)
-	fmt.Println("state: " + *pr.State)
+	fmt.Println("state: " + state)
 }
 
 func main() {
 	client := github.NewClient(nil).WithAuthToken(os.Getenv("GITHUB_TOKEN"))
-	ctx := context.Background()
+	if err := markNotificationsAsRead(context.Background(), client); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func markNotificationsAsRead(ctx context.Context, client *github.Client) error {
 	opt := &github.NotificationListOptions{}
 	notifications, response, err := client.Activity.ListNotifications(ctx, opt)
 	if err != nil {
-		fmt.Println("error " + err.Error() + " " + response.Status)
-		os.Exit(1)
+		return fmt.Errorf("error %w %s", err, response.Status)
 	}
 	for _, notification := range notifications {
 		url := *notification.Subject.URL
 		urlBytes := []byte(url)
-		matched, err := regexp.Match(`pulls/[0-9]*`, []byte(url))
-		if err != nil {
-			continue
-		}
-
-		issueMatched, err := regexp.Match(`issues/[0-9]*`, []byte(url))
-		if err != nil {
-			continue
-		}
+		matched := rePull.MatchString(url)
+		issueMatched := reIssues.MatchString(url)
 		if matched {
-			handlePR(urlBytes, err, client, ctx, notification, url)
+			if err := handlePR(urlBytes, client, ctx, notification, url); err != nil {
+				return err
+			}
 		}
 		if issueMatched {
-			handleIssue(urlBytes, err, client, ctx, notification, url)
+			if err := handleIssue(urlBytes, client, ctx, notification, url); err != nil {
+				return err
+			}
 		}
-
 	}
+	return nil
 }
 
-func handleIssue(urlBytes []byte, err error, client *github.Client, ctx context.Context, notification *github.Notification, url string) {
-	issuesNumRe := regexp.MustCompile(`issues/[0-9]+`)
+func handleIssue(urlBytes []byte, client *github.Client, ctx context.Context, notification *github.Notification, url string) error {
 	foundB := issuesNumRe.Find(urlBytes)
-	numRe := regexp.MustCompile(`[0-9]+`)
 	issueNumber := numRe.Find(foundB)
 	issueNumberStr := string(issueNumber)
 	issueNumberInt, err := strconv.Atoi(issueNumberStr)
 	if err != nil {
-		fmt.Println("error " + err.Error())
-		os.Exit(1)
+		return err
 	}
 	issue, _, err := client.Issues.Get(ctx, *notification.Repository.Owner.Login, *notification.Repository.Name, issueNumberInt)
 	if err != nil {
-		fmt.Println("error " + err.Error())
-		os.Exit(1)
+		return err
 	}
 	if *issue.State == "closed" {
-		printIssueInfo(notification, issue, issueNumberStr, url)
+		printInfo(notification, *issue.Title, issueNumberStr, url)
 		idInt, err := strconv.Atoi(*notification.ID)
 		if err != nil {
-			fmt.Println("error " + err.Error())
-			os.Exit(1)
+			return err
 		}
 		resp, err := client.Activity.MarkThreadDone(ctx, int64(idInt))
 		if err != nil {
-			fmt.Println("error " + err.Error() + " " + resp.Status)
-			os.Exit(1)
+			return fmt.Errorf("error %w %s", err, resp.Status)
 		}
 		fmt.Println("Marked as done")
 		fmt.Println()
 	}
+	return nil
 }
 
-func printIssueInfo(notification *github.Notification, issue *github.Issue, issueNumberStr string, url string) {
-	fmt.Println("Number: " + issueNumberStr)
-	fmt.Println("Url: " + url)
-	fmt.Println("Subject: " + *notification.Subject.Title)
-	fmt.Println("Reason: " + *notification.Reason)
-	fmt.Println("state: " + *issue.Title)
-}
-
-func handlePR(urlBytes []byte, err error, client *github.Client, ctx context.Context, notification *github.Notification, url string) {
-	pullsNumRe := regexp.MustCompile(`pulls/[0-9]+`)
+func handlePR(urlBytes []byte, client *github.Client, ctx context.Context, notification *github.Notification, url string) error {
 	foundB := pullsNumRe.Find(urlBytes)
-	numRe := regexp.MustCompile(`[0-9]+`)
 	prNumber := numRe.Find(foundB)
 	prNumberStr := string(prNumber)
 	prNumberInt, err := strconv.Atoi(prNumberStr)
 	if err != nil {
-		fmt.Println("error " + err.Error())
-		os.Exit(1)
+		return err
 	}
 
 	pr, _, err := client.PullRequests.Get(ctx, *notification.Repository.Owner.Login, *notification.Repository.Name, prNumberInt)
 	if err != nil {
-		fmt.Println("error " + err.Error())
-		os.Exit(1)
+		return err
 	}
 	if *pr.State == "closed" {
-		printInfo(notification, pr, prNumberStr, url)
+		printInfo(notification, *pr.State, prNumberStr, url)
 		idInt, err := strconv.Atoi(*notification.ID)
 		if err != nil {
-			fmt.Println("error " + err.Error())
-			os.Exit(1)
+			return err
 		}
 		resp, err := client.Activity.MarkThreadDone(ctx, int64(idInt))
 		if err != nil {
-			fmt.Println("error " + err.Error() + " " + resp.Status)
-			os.Exit(1)
+			return fmt.Errorf("error %w %s", err, resp.Status)
 		}
 		fmt.Println("Marked as done")
 		fmt.Println()
 	}
+	return nil
 }

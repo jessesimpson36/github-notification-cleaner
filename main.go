@@ -27,7 +27,7 @@ func printInfo(notification *github.Notification, state string, prNumberStr stri
 }
 
 func main() {
-	client := github.NewClient(nil).WithAuthToken(os.Getenv("GITHUB_TOKEN"))
+	client := github.NewClient(nil).WithAuthToken(os.Getenv("GH_TOKEN"))
 	if err := markNotificationsAsRead(context.Background(), client); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
